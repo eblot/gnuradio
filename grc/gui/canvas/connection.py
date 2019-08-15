@@ -20,7 +20,9 @@ Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
 from __future__ import absolute_import, division
 
 from argparse import Namespace
-from math import pi
+from math import ceil, pi
+
+from cairo import Context, Format, ImageSurface
 
 from . import colors
 from .drawable import Drawable
@@ -57,8 +59,8 @@ class Connection(CoreConnection, Drawable):
 
         self._rel_points = None  # connection coordinates relative to sink/source
         self._arrow_rotation = 0.0  # rotation of the arrow in radians
-        self._current_cr = None  # for what_is_selected() of curved line
         self._line_path = None
+        self._line_extents = None
 
     @nop_write
     @property
@@ -134,12 +136,12 @@ class Connection(CoreConnection, Drawable):
             cr.curve_to(*(p2 + p3 + p4))
             cr.line_to(*p5)
             self._line_path = cr.copy_path()
+            self._line_extents = cr.path_extents()
 
     def draw(self, cr):
         """
         Draw the connection.
         """
-        self._current_cr = cr
         sink = self.sink_port
         source = self.source_port
 
@@ -200,21 +202,32 @@ class Connection(CoreConnection, Drawable):
         if coor_m:
             return Drawable.what_is_selected(self, coor, coor_m)
 
+        sx, sy = self.coordinate
+        tx, ty = coor
+
+        if ((tx < sx + self._line_extents[0]) or
+            (ty < sy + self._line_extents[1]) or
+            (tx > sx + self._line_extents[2]) or
+            (ty > sy + self._line_extents[3])):
+            # outside the bounding box
+            return None
+
         x, y = [a - b for a, b in zip(coor, self.coordinate)]
+        w = ceil(self._line_extents[2]-self._line_extents[0]+1)
+        h = ceil(self._line_extents[3]-self._line_extents[1]+1)
 
-        cr = self._current_cr
-
-        if cr is None:
-            return
-        cr.save()
+        # use an image surface to avoid reusing the backend context
+        cr = Context(ImageSurface(Format.A8, w, h))
         cr.new_path()
         cr.append_path(self._line_path)
         cr.set_line_width(cr.get_line_width() * LINE_SELECT_SENSITIVITY)
         hit = cr.in_stroke(x, y)
-        cr.restore()
 
-        if hit:
-            return self
+        if not hit:
+            # not on the line path
+            return None
+
+        return self
 
 
 class DummyCoreConnection(object):
